@@ -1,0 +1,9 @@
+[package]
+name = "keyboard"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+itertools = "0.14.0"
+rand = "0.9.0"
+rusqlite = "0.34.0"
