@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const MAX_TRIES: usize = 100000000;
-const CONCURRENT_TASKS: usize = 10;
+const CONCURRENT_TASKS: usize = 13;
 
 #[derive(Debug, Clone)]
 struct OptimizationResult {
