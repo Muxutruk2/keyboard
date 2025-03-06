@@ -1,3 +1,5 @@
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rusqlite::{params, Connection, Result};
 use std::collections::HashMap;
@@ -9,7 +11,7 @@ use std::sync::Arc;
 
 const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const MAX_TRIES: usize = 100000000;
-const CONCURRENT_TASKS: usize = 100;
+const CONCURRENT_TASKS: usize = 10;
 
 #[derive(Debug, Clone)]
 struct OptimizationResult {
@@ -50,10 +52,9 @@ fn calculate_cost(layout: &[char], bigram_freq: &HashMap<(char, char), f64>) -> 
     })
 }
 
-fn generate_random_layout() -> Vec<char> {
+fn generate_random_layout(rng: &mut StdRng) -> Vec<char> {
     let mut layout: Vec<char> = ALPHABET.chars().collect();
-    let mut rng = rand::rng();
-    layout.shuffle(&mut rng);
+    layout.shuffle(rng);
     layout
 }
 
@@ -118,11 +119,11 @@ fn setup_db() -> Result<Connection> {
     let conn = Connection::open("layouts.db")?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS layouts (
-            id INTEGER PRIMARY KEY,
-            layout TEXT UNIQUE,
-            cost REAL,
-            steps INTEGER
-        )",
+id INTEGER PRIMARY KEY,
+layout TEXT UNIQUE,
+cost REAL,
+steps INTEGER
+)",
         [],
     )?;
     Ok(conn)
@@ -139,7 +140,8 @@ async fn main() -> io::Result<()> {
         let conn = Arc::clone(&conn);
         tasks.push(task::spawn(async move {
             for _ in 0..(MAX_TRIES / CONCURRENT_TASKS) {
-                let initial_layout = generate_random_layout();
+                let mut rng = StdRng::from_rng(&mut rand::rng());
+                let initial_layout = generate_random_layout(&mut rng);
                 let valley = find_valley(initial_layout, &bigram_freq);
                 if !layout_exists(conn.clone(), &valley.layout).await {
                     println!(
