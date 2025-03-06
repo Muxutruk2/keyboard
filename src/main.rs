@@ -1,4 +1,4 @@
-use rand::{seq::SliceRandom, Rng};
+use rand::seq::SliceRandom;
 use rusqlite::{params, Connection, Result};
 use std::collections::HashMap;
 use std::fs::File;
