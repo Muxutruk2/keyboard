@@ -3,9 +3,13 @@ use rusqlite::{params, Connection, Result};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead};
+use tokio::task;
+use tokio::sync::Mutex;
+use std::sync::Arc;
 
 const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const MAX_TRIES: usize = 100000;
+const CONCURRENT_TASKS: usize = 16;
 
 #[derive(Debug, Clone)]
 struct OptimizationResult {
@@ -25,10 +29,7 @@ fn load_bigram_frequencies(filename: &str) -> io::Result<HashMap<(char, char), f
             let bigram = parts[0];
             let freq: Result<f64, _> = parts[1].parse();
             if bigram.len() == 2 && freq.is_ok() {
-                let (a, b) = (
-                    bigram.chars().next().unwrap(),
-                    bigram.chars().nth(1).unwrap(),
-                );
+                let (a, b) = (bigram.chars().next().unwrap(), bigram.chars().nth(1).unwrap());
                 bigrams.insert((a, b), freq.unwrap());
             }
         }
@@ -37,16 +38,15 @@ fn load_bigram_frequencies(filename: &str) -> io::Result<HashMap<(char, char), f
 }
 
 fn calculate_cost(layout: &[char], bigram_freq: &HashMap<(char, char), f64>) -> f64 {
-    let mut cost = 0.0;
-    for ((a, b), freq) in bigram_freq.iter() {
+    bigram_freq.iter().fold(0.0, |mut cost, ((a, b), freq)| {
         if let (Some(pos_a), Some(pos_b)) = (
             layout.iter().position(|&x| x == *a),
             layout.iter().position(|&x| x == *b),
         ) {
             cost += (*freq) * (pos_a.abs_diff(pos_b) as f64);
         }
-    }
-    cost
+        cost
+    })
 }
 
 fn generate_random_layout() -> Vec<char> {
@@ -89,7 +89,8 @@ fn find_valley(
     }
 }
 
-fn save_to_db(conn: &Connection, result: &OptimizationResult) -> Result<()> {
+async fn save_to_db(conn: Arc<Mutex<Connection>>, result: OptimizationResult) -> Result<()> {
+    let conn = conn.lock().await;
     let existing: Result<String> = conn.query_row(
         "SELECT layout FROM layouts WHERE layout = ?1",
         params![result.layout.iter().collect::<String>()],
@@ -118,19 +119,31 @@ fn setup_db() -> Result<Connection> {
     Ok(conn)
 }
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     let bigram_freq = load_bigram_frequencies("bigrams.txt")?;
-    let conn = setup_db().expect("Failed to set up database");
+    let conn = Arc::new(Mutex::new(setup_db().expect("Failed to set up database")));
 
-    for _ in 0..MAX_TRIES {
-        let initial_layout = generate_random_layout();
-        let valley = find_valley(initial_layout, &bigram_freq);
-        println!(
-            "Found valley: {:?} with cost: {:.2}",
-            valley.layout.iter().collect::<String>(),
-            valley.cost
-        );
-        save_to_db(&conn, &valley).expect("Failed to save to DB");
+    let mut tasks = vec![];
+    for _ in 0..CONCURRENT_TASKS {
+        let bigram_freq = bigram_freq.clone();
+        let conn = Arc::clone(&conn);
+        tasks.push(task::spawn(async move {
+            for _ in 0..(MAX_TRIES / CONCURRENT_TASKS) {
+                let initial_layout = generate_random_layout();
+                let valley = find_valley(initial_layout, &bigram_freq);
+                println!(
+                    "Found valley: {:?} with cost: {:.2}",
+                    valley.layout.iter().collect::<String>(),
+                    valley.cost
+                );
+                save_to_db(conn.clone(), valley).await.expect("Failed to save to DB");
+            }
+        }));
+    }
+
+    for t in tasks {
+        t.await.unwrap();
     }
 
     Ok(())
