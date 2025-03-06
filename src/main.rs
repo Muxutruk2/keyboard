@@ -56,6 +56,16 @@ fn generate_random_layout() -> Vec<char> {
     layout
 }
 
+async fn layout_exists(conn: Arc<Mutex<Connection>>, layout: &[char]) -> bool {
+    let conn = conn.lock().await;
+    let existing: Result<String> = conn.query_row(
+        "SELECT layout FROM layouts WHERE layout = ?1",
+        params![layout.iter().collect::<String>()],
+        |row| row.get(0),
+    );
+    existing.is_ok()
+}
+
 fn find_valley(
     mut layout: Vec<char>,
     bigram_freq: &HashMap<(char, char), f64>,
@@ -90,19 +100,14 @@ fn find_valley(
 }
 
 async fn save_to_db(conn: Arc<Mutex<Connection>>, result: OptimizationResult) -> Result<()> {
-    let conn = conn.lock().await;
-    let existing: Result<String> = conn.query_row(
-        "SELECT layout FROM layouts WHERE layout = ?1",
-        params![result.layout.iter().collect::<String>()],
-        |row| row.get(0),
-    );
-
-    if existing.is_err() {
-        conn.execute(
-            "INSERT INTO layouts (layout, cost) VALUES (?1, ?2)",
-            params![result.layout.iter().collect::<String>(), result.cost],
-        )?;
+    if layout_exists(conn.clone(), &result.layout).await {
+        return Ok(());
     }
+    let conn = conn.lock().await;
+    conn.execute(
+        "INSERT INTO layouts (layout, cost) VALUES (?1, ?2)",
+        params![result.layout.iter().collect::<String>(), result.cost],
+    )?;
     Ok(())
 }
 
@@ -132,12 +137,14 @@ async fn main() -> io::Result<()> {
             for _ in 0..(MAX_TRIES / CONCURRENT_TASKS) {
                 let initial_layout = generate_random_layout();
                 let valley = find_valley(initial_layout, &bigram_freq);
-                println!(
-                    "Found valley: {:?} with cost: {:.2}",
-                    valley.layout.iter().collect::<String>(),
-                    valley.cost
-                );
-                save_to_db(conn.clone(), valley).await.expect("Failed to save to DB");
+                if !layout_exists(conn.clone(), &valley.layout).await {
+                    println!(
+                        "Found valley: {:?} with cost: {:.2}",
+                        valley.layout.iter().collect::<String>(),
+                        valley.cost
+                    );
+                    save_to_db(conn.clone(), valley).await.expect("Failed to save to DB");
+                }
             }
         }));
     }
