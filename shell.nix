@@ -5,5 +5,6 @@ pkgs.mkShell {
     pkgs.cargo
     pkgs.pkg-config
     pkgs.sqlite
+    pkgs.htop
   ];
 }

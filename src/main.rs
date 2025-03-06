@@ -8,13 +8,14 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 
 const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
-const MAX_TRIES: usize = 100000;
-const CONCURRENT_TASKS: usize = 16;
+const MAX_TRIES: usize = 100000000;
+const CONCURRENT_TASKS: usize = 100;
 
 #[derive(Debug, Clone)]
 struct OptimizationResult {
     layout: Vec<char>,
     cost: f64,
+    steps: usize,
 }
 
 fn load_bigram_frequencies(filename: &str) -> io::Result<HashMap<(char, char), f64>> {
@@ -71,6 +72,7 @@ fn find_valley(
     bigram_freq: &HashMap<(char, char), f64>,
 ) -> OptimizationResult {
     let mut current_cost = calculate_cost(&layout, bigram_freq);
+    let mut steps = 0;
     loop {
         let mut best_swap = None;
         let mut best_swap_cost = current_cost;
@@ -86,7 +88,7 @@ fn find_valley(
                 layout.swap(i, j);
             }
         }
-
+        steps += 1;
         if let Some((i, j)) = best_swap {
             layout.swap(i, j);
             current_cost = best_swap_cost;
@@ -94,6 +96,7 @@ fn find_valley(
             return OptimizationResult {
                 layout,
                 cost: current_cost,
+                steps,
             };
         }
     }
@@ -105,8 +108,8 @@ async fn save_to_db(conn: Arc<Mutex<Connection>>, result: OptimizationResult) ->
     }
     let conn = conn.lock().await;
     conn.execute(
-        "INSERT INTO layouts (layout, cost) VALUES (?1, ?2)",
-        params![result.layout.iter().collect::<String>(), result.cost],
+        "INSERT INTO layouts (layout, cost, steps) VALUES (?1, ?2, ?3)",
+        params![result.layout.iter().collect::<String>(), result.cost, result.steps],
     )?;
     Ok(())
 }
@@ -117,7 +120,8 @@ fn setup_db() -> Result<Connection> {
         "CREATE TABLE IF NOT EXISTS layouts (
             id INTEGER PRIMARY KEY,
             layout TEXT UNIQUE,
-            cost REAL
+            cost REAL,
+            steps INTEGER
         )",
         [],
     )?;
@@ -139,11 +143,12 @@ async fn main() -> io::Result<()> {
                 let valley = find_valley(initial_layout, &bigram_freq);
                 if !layout_exists(conn.clone(), &valley.layout).await {
                     println!(
-                        "Found valley: {:?} with cost: {:.2}",
+                        "Found valley: {:?} with cost: {}. Steps {}",
                         valley.layout.iter().collect::<String>(),
-                        valley.cost
+                        valley.cost,
+                        valley.steps,
                     );
-                    save_to_db(conn.clone(), valley).await.expect("Failed to save to DB");
+                    save_to_db(conn.clone(), valley).await.map_err(|e| eprintln!("Failed to save to DB: {e}"));
                 }
             }
         }));
